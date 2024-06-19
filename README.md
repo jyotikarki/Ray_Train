@@ -50,7 +50,7 @@ This repository contains scripts for generating synthetic time series data, trai
 - **Dataset Generation**: Instructions on setting up and generating synthetic data using dataset.py.
   - Provides steps to modify parameters and run the script.
 - **Model Training and Evaluation**: Details on setting up dependencies, training models with main.py, and viewing forecast results.
-  -Includes notes on customization and deployment.
+- Includes notes on customization and deployment.
 - **Additional Notes**: Provides tips on managing Python environments, customizing scripts, and potential extensions.
 
 
