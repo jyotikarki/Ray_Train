@@ -18,10 +18,8 @@ data = pd.read_csv('time_series_sku_dataset_new.csv')
 # Ensure the Date column is of datetime type
 data['Date'] = pd.to_datetime(data['Date'])
 
-
 # Simple preprocessing function
 def preprocess_data(data):
-    # Fill missing values with median
     data['Sales'].fillna(data['Sales'].median(), inplace=True)
     return data
 
@@ -30,16 +28,6 @@ data = preprocess_data(data)
 
 @ray.remote
 def arima_forecast(train, test):
-    """
-    Perform ARIMA forecasting on the given training and testing data.
-
-    Parameters:
-    train (pd.Series): Training data series.
-    test (pd.Series): Testing data series.
-
-    Returns:
-    list: Predictions for the testing data.
-    """
     history = [x for x in train]
     predictions = []
     for t in range(len(test)):
@@ -56,16 +44,6 @@ def arima_forecast(train, test):
 
 @ray.remote
 def prophet_forecast(train, test):
-    """
-    Perform Prophet forecasting on the given training and testing data.
-
-    Parameters:
-    train (pd.Series): Training data series.
-    test (pd.Series): Testing data series.
-
-    Returns:
-    np.ndarray: Predictions for the testing data.
-    """
     df_train = pd.DataFrame({'ds': train.index, 'y': train.values})
     model = Prophet()
     model.fit(df_train)
@@ -75,16 +53,6 @@ def prophet_forecast(train, test):
     return predictions
 
 def rmse(actual, predicted):
-    """
-    Calculate the Root Mean Squared Error (RMSE) between actual and predicted values.
-
-    Parameters:
-    actual (np.ndarray): Actual values.
-    predicted (np.ndarray): Predicted values.
-
-    Returns:
-    float: RMSE value.
-    """
     actual = np.array(actual)
     predicted = np.array(predicted)
     actual.setflags(write=True)
@@ -93,40 +61,22 @@ def rmse(actual, predicted):
 
 @ray.remote
 def evaluate_models(train, test):
-    """
-    Evaluate ARIMA and Prophet models on the given training and testing data.
-
-    Parameters:
-    train (pd.Series): Training data series.
-    test (pd.Series): Testing data series.
-
-    Returns:
-    tuple: Best model name, RMSE value, and predictions.
-    """
     arima_preds = ray.get(arima_forecast.remote(train, test))
     prophet_preds = ray.get(prophet_forecast.remote(train, test))
     
     arima_rmse = rmse(test, arima_preds)
     prophet_rmse = rmse(test, prophet_preds)
-    print('ARIMA', arima_rmse, arima_preds)
-    print('Prophet', prophet_rmse, prophet_preds)
+    
+    print('ARIMA RMSE:', arima_rmse)
+    print('Prophet RMSE:', prophet_rmse)
     
     if arima_rmse < prophet_rmse:
-        return 'ARIMA', arima_rmse, arima_preds
+        return 'ARIMA', arima_rmse, arima_preds, prophet_rmse
     else:
-        return 'Prophet', prophet_rmse, prophet_preds
+        return 'Prophet', prophet_rmse, prophet_preds, arima_rmse
 
 @ray.remote
 def forecast_for_sku(sku_data):
-    """
-    Forecast sales for a specific SKU using ARIMA and Prophet models.
-
-    Parameters:
-    sku_data (pd.DataFrame): Data for a specific SKU.
-
-    Returns:
-    tuple: SKU identifier and forecast results.
-    """
     if len(sku_data) < 10:  # Ensure enough data points
         return None, f"Skipping SKU due to insufficient data."
 
@@ -135,53 +85,40 @@ def forecast_for_sku(sku_data):
     train.index = sku_data['Date'][:train_size]
     test.index = sku_data['Date'][train_size:]
 
-    best_model, rmse_value, predictions = ray.get(evaluate_models.remote(train, test))
+    best_model, best_rmse, best_preds, other_rmse = ray.get(evaluate_models.remote(train, test))
     return sku_data['SKU'].iloc[0], {
         'best_model': best_model,
-        'rmse': rmse_value,
-        'predictions': predictions,
+        'best_rmse': best_rmse,
+        'other_rmse': other_rmse,
+        'predictions': best_preds,
         'dates': test.index,
         'actual': test.values
     }
 
 def forecast_all_skus(data):
-    """
-    Forecast sales for all SKUs in the dataset.
-
-    Parameters:
-    data (pd.DataFrame): The entire dataset.
-
-    Returns:
-    pd.DataFrame: DataFrame containing forecast results for all SKUs.
-    """
     skus = data['SKU'].unique()
     results = []
 
-    # Create a list of Ray tasks
     tasks = [forecast_for_sku.remote(data[data['SKU'] == sku].sort_values('Date')) for sku in skus]
 
-    # Execute tasks in parallel
     results_list = ray.get(tasks)
 
-    # Collect results
     for sku, result in results_list:
         if sku is not None:
-            for date, actual, pred in zip(result['dates'], result['actual'], result['predictions']):
-                results.append({
-                    'SKU': sku,
-                    'Date': date,
-                    'Actual Sales': actual,
-                    'Predicted Sales': pred,
-                    'Best Model': result['best_model'],
-                    'RMSE': result['rmse']
-                })
+            results.append({
+                'SKU': sku,
+                'Best Model': result['best_model'],
+                'Best RMSE': result['best_rmse'],
+                'Other RMSE': result['other_rmse']
+            })
 
-    return pd.DataFrame(results)
+    # Remove duplicates based on SKU and retain the best model information
+    results_df = pd.DataFrame(results).drop_duplicates(subset=['SKU'])
 
-# Forecast for all SKUs and store results in a DataFrame
+    return results_df
+
 results_df = forecast_all_skus(data)
 
-# Save the results to a CSV file
 results_df.to_csv('sku_predictions.csv', index=False)
 
 print("Predictions saved to 'sku_predictions.csv'")

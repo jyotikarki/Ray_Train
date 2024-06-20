@@ -6,6 +6,7 @@ from sklearn.metrics import mean_squared_error
 import warnings
 import ray
 
+# Ignore warnings
 warnings.filterwarnings("ignore")
 
 # Initialize Ray
@@ -17,9 +18,28 @@ data = pd.read_csv('time_series_sku_dataset_new.csv')
 # Ensure the Date column is of datetime type
 data['Date'] = pd.to_datetime(data['Date'])
 
-# Define helper functions
+
+# Simple preprocessing function
+def preprocess_data(data):
+    # Fill missing values with median
+    data['Sales'].fillna(data['Sales'].median(), inplace=True)
+    return data
+
+# Preprocess the entire dataset
+data = preprocess_data(data)
+
 @ray.remote
 def arima_forecast(train, test):
+    """
+    Perform ARIMA forecasting on the given training and testing data.
+
+    Parameters:
+    train (pd.Series): Training data series.
+    test (pd.Series): Testing data series.
+
+    Returns:
+    list: Predictions for the testing data.
+    """
     history = [x for x in train]
     predictions = []
     for t in range(len(test)):
@@ -36,6 +56,16 @@ def arima_forecast(train, test):
 
 @ray.remote
 def prophet_forecast(train, test):
+    """
+    Perform Prophet forecasting on the given training and testing data.
+
+    Parameters:
+    train (pd.Series): Training data series.
+    test (pd.Series): Testing data series.
+
+    Returns:
+    np.ndarray: Predictions for the testing data.
+    """
     df_train = pd.DataFrame({'ds': train.index, 'y': train.values})
     model = Prophet()
     model.fit(df_train)
@@ -45,6 +75,16 @@ def prophet_forecast(train, test):
     return predictions
 
 def rmse(actual, predicted):
+    """
+    Calculate the Root Mean Squared Error (RMSE) between actual and predicted values.
+
+    Parameters:
+    actual (np.ndarray): Actual values.
+    predicted (np.ndarray): Predicted values.
+
+    Returns:
+    float: RMSE value.
+    """
     actual = np.array(actual)
     predicted = np.array(predicted)
     actual.setflags(write=True)
@@ -53,6 +93,16 @@ def rmse(actual, predicted):
 
 @ray.remote
 def evaluate_models(train, test):
+    """
+    Evaluate ARIMA and Prophet models on the given training and testing data.
+
+    Parameters:
+    train (pd.Series): Training data series.
+    test (pd.Series): Testing data series.
+
+    Returns:
+    tuple: Best model name, RMSE value, and predictions.
+    """
     arima_preds = ray.get(arima_forecast.remote(train, test))
     prophet_preds = ray.get(prophet_forecast.remote(train, test))
     
@@ -68,6 +118,15 @@ def evaluate_models(train, test):
 
 @ray.remote
 def forecast_for_sku(sku_data):
+    """
+    Forecast sales for a specific SKU using ARIMA and Prophet models.
+
+    Parameters:
+    sku_data (pd.DataFrame): Data for a specific SKU.
+
+    Returns:
+    tuple: SKU identifier and forecast results.
+    """
     if len(sku_data) < 10:  # Ensure enough data points
         return None, f"Skipping SKU due to insufficient data."
 
@@ -86,6 +145,15 @@ def forecast_for_sku(sku_data):
     }
 
 def forecast_all_skus(data):
+    """
+    Forecast sales for all SKUs in the dataset.
+
+    Parameters:
+    data (pd.DataFrame): The entire dataset.
+
+    Returns:
+    pd.DataFrame: DataFrame containing forecast results for all SKUs.
+    """
     skus = data['SKU'].unique()
     results = []
 
@@ -101,9 +169,6 @@ def forecast_all_skus(data):
             for date, actual, pred in zip(result['dates'], result['actual'], result['predictions']):
                 results.append({
                     'SKU': sku,
-                    'Date': date,
-                    'Actual Sales': actual,
-                    'Predicted Sales': pred,
                     'Best Model': result['best_model'],
                     'RMSE': result['rmse']
                 })
@@ -117,3 +182,10 @@ results_df = forecast_all_skus(data)
 results_df.to_csv('sku_predictions.csv', index=False)
 
 print("Predictions saved to 'sku_predictions.csv'")
+
+
+
+
+-------
+no total ssales ..
+slaes of diff diff products
