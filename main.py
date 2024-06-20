@@ -71,9 +71,9 @@ def evaluate_models(train, test):
     print('Prophet RMSE:', prophet_rmse)
     
     if arima_rmse < prophet_rmse:
-        return 'ARIMA', arima_rmse, arima_preds, prophet_rmse
+        return 'ARIMA', arima_rmse, arima_preds, prophet_rmse, 'Prophet'
     else:
-        return 'Prophet', prophet_rmse, prophet_preds, arima_rmse
+        return 'Prophet', prophet_rmse, prophet_preds, arima_rmse, 'ARIMA'
 
 @ray.remote
 def forecast_for_sku(sku_data):
@@ -85,11 +85,12 @@ def forecast_for_sku(sku_data):
     train.index = sku_data['Date'][:train_size]
     test.index = sku_data['Date'][train_size:]
 
-    best_model, best_rmse, best_preds, other_rmse = ray.get(evaluate_models.remote(train, test))
-    return sku_data['SKU'].iloc[0], {
+    best_model, best_rmse, best_preds, other_rmse, other_model = ray.get(evaluate_models.remote(train, test))
+    return sku_data['SKU'].iloc[0], sku_data['Product'].iloc[0], {
         'best_model': best_model,
         'best_rmse': best_rmse,
         'other_rmse': other_rmse,
+        'other_model': other_model,
         'predictions': best_preds,
         'dates': test.index,
         'actual': test.values
@@ -103,17 +104,22 @@ def forecast_all_skus(data):
 
     results_list = ray.get(tasks)
 
-    for sku, result in results_list:
+    for sku, product, result in results_list:
         if sku is not None:
             results.append({
                 'SKU': sku,
+                'Product': product,
                 'Best Model': result['best_model'],
                 'Best RMSE': result['best_rmse'],
-                'Other RMSE': result['other_rmse']
+                'Other RMSE': result['other_rmse'],
+                'Other Model': result['other_model']
             })
 
-    # Remove duplicates based on SKU and retain the best model information
     results_df = pd.DataFrame(results).drop_duplicates(subset=['SKU'])
+
+    # Include the model name of the second RMSE in the first row
+    if not results_df.empty:
+        results_df.at[0, 'Other Model'] = results_df.iloc[0]['Other Model']
 
     return results_df
 
