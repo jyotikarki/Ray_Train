@@ -18,6 +18,16 @@ data = pd.read_csv('time_series_sku_dataset_new.csv')
 # Ensure the Date column is of datetime type
 data['Date'] = pd.to_datetime(data['Date'])
 
+
+# Simple preprocessing function
+def preprocess_data(data):
+    # Fill missing values with median
+    data['Sales'].fillna(data['Sales'].median(), inplace=True)
+    return data
+
+# Preprocess the entire dataset
+data = preprocess_data(data)
+
 @ray.remote
 def arima_forecast(train, test):
     """
